@@ -1,0 +1,82 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build Directories
+*/bin
+*/demos/ConsoleDemo/Debug
+*/demos/ConsoleDemo/Release
+*/demos/ConsoleDemo/x64/Debug
+*/demos/ConsoleDemo/x64/Release
+*/demos/MFCDemo/Debug
+*/demos/MFCDemo/Release*
+*/demos/WTLDemo/Debug
+*/demos/MFCDemo/Release*
+*/demos/WTLDemo/x64/Debug
+*/demos/MFCDemo/x64/Release*
+*/processing/crashrptprobe/Debug
+*/processing/crashrptprobe/Release*
+*/processing/crashrptprobe/x64/Debug
+*/processing/crashrptprobe/x64/Release*
+*/processing/crprober/Debug
+*/processing/crprober/Release*
+*/processing/crprober/x64/Debug
+*/processing/crprober/x64/Release*
+*/reporting/crashrpt/Debug
+*/reporting/crashrpt/Release*
+*/reporting/crashrpt/x64/Debug
+*/reporting/crashrpt/x64/Release*
+*/reporting/crashsender/Debug
+*/reporting/crashsender/Release*
+*/reporting/crashsender/x64/Debug
+*/reporting/crashsender/x64/Release*
+*/tests/Release*
+*/tests/x64
+**/Debug
+**/Release*
+**/x64
+lib/*
+bin/*
+*/Backup
+.vs/*
+
+# Visual Studio files
+*.vcproj.*.user
+*.vcxproj.user
+*/UpgradeLog.htm
+*.plg
+*.ilk
+*.bsc
+*.pdb
+*.suo
+*.ncb
+*.opt
