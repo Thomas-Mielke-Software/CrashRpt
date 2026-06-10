@@ -45,7 +45,12 @@ namespace Utility
     void UTC2SystemTime(CString sUTC, SYSTEMTIME& st);
 
     // Returns friendly name of operating system (name, version, service pack)
-    int GetOSFriendlyName(CString& sOSName);  
+    int GetOSFriendlyName(CString& sOSName);
+
+    // If running under Wine/CrossOver, returns a description of the emulation
+    // environment, e.g. "emulated by Wine 9.0 on macOS (Darwin 23.5.0)".
+    // Returns 0 on success (we are running under Wine), 1 otherwise.
+    int GetWineEnvironment(CString& sWineInfo);
 
     // Returns TRUE if Windows is 64-bit
     BOOL IsOS64Bit();  

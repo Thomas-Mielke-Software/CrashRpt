@@ -201,11 +201,112 @@ int Utility::GetOSFriendlyName(CString& sOSName)
 
 #pragma warning(default:4996)
 
-        regKey.Close();    
+        regKey.Close();
+
+        // If we are actually running inside Wine/CrossOver (e.g. on macOS or
+        // Linux), append information about the emulation environment so that
+        // the crash report shows where the application was really executed.
+        CString sWineInfo;
+        if(0 == GetWineEnvironment(sWineInfo))
+        {
+            sOSName += _T(" ");
+            sOSName += sWineInfo;
+        }
+
         return 0;
     }
 
     return 1;
+}
+
+int Utility::GetWineEnvironment(CString& sWineInfo)
+{
+    sWineInfo.Empty();
+
+    // Presence of the HKEY_LOCAL_MACHINE\Software\Wine registry key indicates
+    // that the application is running under Wine (or a Wine-based product such
+    // as CrossOver). On a native Windows installation this key does not exist.
+    CRegKey regKey;
+    if(ERROR_SUCCESS != regKey.Open(HKEY_LOCAL_MACHINE, _T("Software\\Wine"), KEY_READ))
+        return 1;
+    regKey.Close();
+
+    // Wine exposes its version and the host operating system through a set of
+    // (Wine-specific) exports of ntdll.dll. These are absent on real Windows,
+    // so we resolve them dynamically.
+    typedef const char * (__cdecl *PFN_WINE_GET_VERSION)(void);
+    typedef const char * (__cdecl *PFN_WINE_GET_BUILD_ID)(void);
+    typedef void (__cdecl *PFN_WINE_GET_HOST_VERSION)(const char **sysname, const char **release);
+
+    HMODULE hNtdll = GetModuleHandle(_T("ntdll.dll"));
+    if(hNtdll == NULL)
+        return 1;
+
+    PFN_WINE_GET_VERSION pfnWineGetVersion =
+        (PFN_WINE_GET_VERSION)GetProcAddress(hNtdll, "wine_get_version");
+    if(pfnWineGetVersion == NULL)
+        return 1; // The registry key exists but the export does not -> not a genuine Wine.
+
+    PFN_WINE_GET_BUILD_ID pfnWineGetBuildId =
+        (PFN_WINE_GET_BUILD_ID)GetProcAddress(hNtdll, "wine_get_build_id");
+    PFN_WINE_GET_HOST_VERSION pfnWineGetHostVersion =
+        (PFN_WINE_GET_HOST_VERSION)GetProcAddress(hNtdll, "wine_get_host_version");
+
+    // Distinguish CrossOver (CodeWeavers' commercial Wine) from plain Wine.
+    // The build id of CrossOver contains the literal "CrossOver".
+    bool bIsCrossOver = false;
+    if(pfnWineGetBuildId != NULL)
+    {
+        const char* szBuildId = pfnWineGetBuildId();
+        if(szBuildId != NULL && strstr(szBuildId, "CrossOver") != NULL)
+            bIsCrossOver = true;
+    }
+
+    LPCTSTR szProduct = bIsCrossOver ? _T("CrossOver") : _T("Wine");
+
+    sWineInfo = _T("emulated by ");
+    sWineInfo += szProduct;
+
+    const char* szVersion = pfnWineGetVersion();
+    if(szVersion != NULL && *szVersion != '\0')
+    {
+        sWineInfo += _T(" ");
+        sWineInfo += CString(szVersion);
+    }
+
+    // Resolve the host operating system (the OS Wine itself runs on).
+    if(pfnWineGetHostVersion != NULL)
+    {
+        const char* szSysName = NULL;
+        const char* szRelease = NULL;
+        pfnWineGetHostVersion(&szSysName, &szRelease);
+
+        if(szSysName != NULL && *szSysName != '\0')
+        {
+            // Map the kernel's sysname to a friendly host OS name.
+            CString sHostOS;
+            if(lstrcmpiA(szSysName, "Darwin") == 0)
+                sHostOS = _T("macOS");
+            else
+                sHostOS = CString(szSysName); // e.g. "Linux", "FreeBSD", ...
+
+            sWineInfo += _T(" on ");
+            sWineInfo += sHostOS;
+
+            // The release string is the host kernel version (for Darwin this is
+            // the XNU kernel version, not the macOS marketing version).
+            if(szRelease != NULL && *szRelease != '\0')
+            {
+                sWineInfo += _T(" (");
+                sWineInfo += CString(szSysName);
+                sWineInfo += _T(" ");
+                sWineInfo += CString(szRelease);
+                sWineInfo += _T(")");
+            }
+        }
+    }
+
+    return 0;
 }
 
 BOOL Utility::IsOS64Bit()
