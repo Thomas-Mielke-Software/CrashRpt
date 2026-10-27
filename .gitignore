@@ -80,3 +80,4 @@ bin/*
 *.suo
 *.ncb
 *.opt
+*.aps

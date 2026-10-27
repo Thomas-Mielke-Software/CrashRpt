@@ -219,6 +219,159 @@ int Utility::GetOSFriendlyName(CString& sOSName)
     return 1;
 }
 
+// Wine-specific exports of kernel32.dll for converting between Unix and DOS paths.
+typedef WCHAR * (__cdecl *PFN_WINE_GET_DOS_FILE_NAME)(const char *unix_name);
+typedef char * (__cdecl *PFN_WINE_GET_UNIX_FILE_NAME)(const WCHAR *dos_name);
+
+// Unix paths are UTF-8 encoded on macOS (and virtually all Linux systems).
+static CString Utf8ToWide(const char* szUtf8)
+{
+    CString sWide;
+    int nLen = MultiByteToWideChar(CP_UTF8, 0, szUtf8, -1, NULL, 0);
+    if(nLen > 1)
+    {
+        MultiByteToWideChar(CP_UTF8, 0, szUtf8, -1, sWide.GetBuffer(nLen), nLen);
+        sWide.ReleaseBuffer();
+    }
+    return sWide;
+}
+
+static std::string WideToUtf8(LPCWSTR szWide)
+{
+    int nLen = WideCharToMultiByte(CP_UTF8, 0, szWide, -1, NULL, 0, NULL, NULL);
+    if(nLen <= 1)
+        return std::string();
+    std::string sUtf8(nLen, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, szWide, -1, &sUtf8[0], nLen, NULL, NULL);
+    sUtf8.resize(nLen - 1); // drop terminating zero
+    return sUtf8;
+}
+
+// Returns the Unix path of the outermost app bundle (".../Name.app") that contains
+// the given Unix path, or an empty string if the path is not inside a bundle.
+static CString GetAppBundleFromUnixPath(const CString& sUnixPath)
+{
+    CString sLower = sUnixPath;
+    sLower.MakeLower();
+    int nPos = sLower.Find(L".app/contents");
+    if(nPos < 0)
+        return CString();
+    return sUnixPath.Left(nPos + 4); // up to and including ".app"
+}
+
+// Reads <key>szKey</key><string>value</string> from an XML property list.
+static std::string GetPlistString(const std::string& sPlist, const char* szKey)
+{
+    const char* szWhitespace = " \t\r\n";
+    std::string sKeyTag = std::string("<key>") + szKey + "</key>";
+    size_t nPos = sPlist.find(sKeyTag);
+    if(nPos == std::string::npos)
+        return std::string();
+    nPos += sKeyTag.length();
+    size_t nStart = sPlist.find_first_not_of(szWhitespace, nPos);
+    if(nStart == std::string::npos || sPlist.compare(nStart, 8, "<string>") != 0)
+        return std::string(); // value is not a <string>
+    nStart += 8;
+    size_t nEnd = sPlist.find("</string>", nStart);
+    if(nEnd == std::string::npos)
+        return std::string();
+    std::string sValue = sPlist.substr(nStart, nEnd - nStart);
+    size_t nFirst = sValue.find_first_not_of(szWhitespace);
+    if(nFirst == std::string::npos)
+        return std::string();
+    return sValue.substr(nFirst, sValue.find_last_not_of(szWhitespace) - nFirst + 1);
+}
+
+// On macOS, Wine is usually embedded in an app bundle (e.g. an application wrapped
+// with CodeWeavers' PortJump/CrossOver). The bundle (and the Wine engine inside it)
+// is versioned independently of the Windows executable, so report the bundle name and
+// the version from its Contents/Info.plist, e.g. "EasyCash&Tax.app 3.9.0".
+// Returns 0 if a bundle was found (the version may be reported as unknown), 1 otherwise.
+static int GetWineAppBundleInfo(CString& sBundleInfo)
+{
+    sBundleInfo.Empty();
+
+    HMODULE hKernel32 = GetModuleHandle(_T("kernel32.dll"));
+    if(hKernel32 == NULL)
+        return 1;
+    PFN_WINE_GET_DOS_FILE_NAME pfnWineGetDosFileName =
+        (PFN_WINE_GET_DOS_FILE_NAME)GetProcAddress(hKernel32, "wine_get_dos_file_name");
+    PFN_WINE_GET_UNIX_FILE_NAME pfnWineGetUnixFileName =
+        (PFN_WINE_GET_UNIX_FILE_NAME)GetProcAddress(hKernel32, "wine_get_unix_file_name");
+    if(pfnWineGetDosFileName == NULL)
+        return 1;
+
+    // Candidate paths inside the bundle: CrossOver's engine root (CX_ROOT) and the Wine
+    // prefix are passed from the Unix environment; the bottle itself may also reside
+    // inside the bundle, so check the Unix path of the executable as well.
+    CString asBundles[3];
+    int nBundles = 0;
+    LPCWSTR aszVars[] = { L"CX_ROOT", L"WINEPREFIX" };
+    for(int i = 0; i < _countof(aszVars); i++)
+    {
+        WCHAR szValue[2048];
+        DWORD dwLen = GetEnvironmentVariableW(aszVars[i], szValue, _countof(szValue));
+        if(dwLen > 0 && dwLen < _countof(szValue))
+        {
+            asBundles[nBundles] = GetAppBundleFromUnixPath(szValue);
+            if(!asBundles[nBundles].IsEmpty())
+                nBundles++;
+        }
+    }
+    WCHAR szExe[_MAX_PATH];
+    if(pfnWineGetUnixFileName != NULL && GetModuleFileNameW(NULL, szExe, _MAX_PATH))
+    {
+        char* szUnixExe = pfnWineGetUnixFileName(szExe);
+        if(szUnixExe != NULL)
+        {
+            asBundles[nBundles] = GetAppBundleFromUnixPath(Utf8ToWide(szUnixExe));
+            if(!asBundles[nBundles].IsEmpty())
+                nBundles++;
+            HeapFree(GetProcessHeap(), 0, szUnixExe);
+        }
+    }
+
+    for(int i = 0; i < nBundles; i++)
+    {
+        CString sName = asBundles[i].Mid(asBundles[i].ReverseFind(L'/') + 1);
+        if(sBundleInfo.IsEmpty())
+            sBundleInfo = sName + _T(" (version unknown)");
+
+        CString sInfoPlist = asBundles[i] + L"/Contents/Info.plist";
+        WCHAR* szDosPath = pfnWineGetDosFileName(WideToUtf8(sInfoPlist).c_str());
+        if(szDosPath == NULL)
+            continue;
+        HANDLE hFile = CreateFileW(szDosPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        HeapFree(GetProcessHeap(), 0, szDosPath);
+        if(hFile == INVALID_HANDLE_VALUE)
+            continue;
+
+        std::string sPlist;
+        DWORD dwSize = GetFileSize(hFile, NULL);
+        if(dwSize != INVALID_FILE_SIZE && dwSize > 0 && dwSize < 1024 * 1024)
+        {
+            DWORD dwRead = 0;
+            sPlist.resize(dwSize);
+            if(!ReadFile(hFile, &sPlist[0], dwSize, &dwRead, NULL))
+                dwRead = 0;
+            sPlist.resize(dwRead);
+        }
+        CloseHandle(hFile);
+
+        std::string sVersion = GetPlistString(sPlist, "CFBundleShortVersionString");
+        if(sVersion.empty())
+            sVersion = GetPlistString(sPlist, "CFBundleVersion");
+        if(!sVersion.empty())
+        {
+            sBundleInfo = sName + _T(" ") + Utf8ToWide(sVersion.c_str());
+            break;
+        }
+    }
+
+    return sBundleInfo.IsEmpty() ? 1 : 0;
+}
+
 int Utility::GetWineEnvironment(CString& sWineInfo)
 {
     sWineInfo.Empty();
@@ -302,6 +455,15 @@ int Utility::GetWineEnvironment(CString& sWineInfo)
                 sWineInfo += _T(" ");
                 sWineInfo += CString(szRelease);
                 sWineInfo += _T(")");
+            }
+
+            // On macOS, also report the app bundle Wine is embedded in (see
+            // GetWineAppBundleInfo); report explicitly if none was found.
+            if(lstrcmpiA(szSysName, "Darwin") == 0)
+            {
+                CString sBundleInfo;
+                sWineInfo += _T(", app bundle ");
+                sWineInfo += (0 == GetWineAppBundleInfo(sBundleInfo)) ? sBundleInfo : CString(_T("not found"));
             }
         }
     }

@@ -48,7 +48,7 @@ namespace Utility
     int GetOSFriendlyName(CString& sOSName);
 
     // If running under Wine/CrossOver, returns a description of the emulation
-    // environment, e.g. "emulated by Wine 9.0 on macOS (Darwin 23.5.0)".
+    // environment, e.g. "emulated by Wine 9.0 on macOS (Darwin 23.5.0), app bundle EasyCash&Tax.app 3.9.0".
     // Returns 0 on success (we are running under Wine), 1 otherwise.
     int GetWineEnvironment(CString& sWineInfo);
 
